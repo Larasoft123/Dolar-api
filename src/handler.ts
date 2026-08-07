@@ -7,7 +7,12 @@ import { getRedis, redisOk } from "./lib/redis";
 import { HttpError } from "./utils/http";
 
 const WELCOME = "dolar-api: GET /rates, /rates/bcv, /rates/bcv/next, /rates/usdt, /health";
-
+const CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Max-Age": "86400",
+};
 
 const redis = getRedis();
 const ratelimit = redis
@@ -17,26 +22,30 @@ const ratelimit = redis
 export default {
     async fetch(req: Request): Promise<Response> {
         try {
+            if (req.method === "OPTIONS") {
+                return withCors(new Response(null, { status: 204 }));
+            }
+
             const path = normalizePath(req);
             switch (path) {
                 case "/":
-                    return new Response(WELCOME);
+                    return withCors(new Response(WELCOME));
                 case "/rates":
-                    return rates(req);
+                    return withCors(await rates(req));
                 case "/rates/bcv":
-                    return rateRoute(req, (cache) => getBcvRate(cache));
+                    return withCors(await rateRoute(req, (cache) => getBcvRate(cache)));
                 case "/rates/bcv/next":
-                    return bcvNextRoute(req);
+                    return withCors(await bcvNextRoute(req));
                 case "/rates/usdt":
-                    return rateRoute(req, (cache) => getUsdt(cache));
+                    return withCors(await rateRoute(req, (cache) => getUsdt(cache)));
                 case "/health":
-                    return Response.json({ status: "ok", redis: await redisOk() });
+                    return withCors(Response.json({ status: "ok", redis: await redisOk() }));
                 default:
-                    return new Response("Not Found", { status: 404 });
+                    return withCors(new Response("Not Found", { status: 404 }));
             }
         } catch (error) {
             // Final safety net: serverless has no Bun.serve error() hook.
-            return errorResponse(error);
+            return withCors(errorResponse(error));
         }
     },
 };
@@ -159,4 +168,14 @@ function errorResponse(error: unknown): Response {
     }
     const info = errorInfo(error);
     return Response.json({ error: info }, { status: info.code === "INTERNAL" ? 500 : 502 });
+}
+
+function withCors(response: Response): Response {
+    const headers = new Headers(response.headers);
+    Object.entries(CORS_HEADERS).forEach(([key, value]) => headers.set(key, value));
+    return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+    });
 }
